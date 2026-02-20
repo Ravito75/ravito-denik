@@ -1,5 +1,6 @@
 // RAVITO Worklog PWA - simple offline cache
-const CACHE = "ravito-worklog-v2"; // bump to force update
+// Build: v2-paid-1 (based on stable v2)
+const CACHE = "ravito-worklog-v2-paid2"; // bump to force update
 const ASSETS = [
   "./",
   "./index.html",
@@ -17,7 +18,8 @@ self.addEventListener("install", (event) => {
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches.keys()
+    caches
+      .keys()
       .then((keys) => Promise.all(keys.map((k) => (k === CACHE ? null : caches.delete(k)))))
       .then(() => self.clients.claim())
   );
@@ -28,13 +30,15 @@ self.addEventListener("fetch", (event) => {
   event.respondWith(
     caches.match(req).then((cached) => {
       if (cached) return cached;
-      return fetch(req).then((res) => {
-        if (req.method === "GET" && res && res.status === 200 && res.type === "basic") {
-          const copy = res.clone();
-          caches.open(CACHE).then((cache) => cache.put(req, copy));
-        }
-        return res;
-      }).catch(() => caches.match("./index.html"));
+      return fetch(req)
+        .then((res) => {
+          if (req.method === "GET" && res && res.status === 200 && res.type === "basic") {
+            const copy = res.clone();
+            caches.open(CACHE).then((cache) => cache.put(req, copy));
+          }
+          return res;
+        })
+        .catch(() => caches.match("./index.html"));
     })
   );
 });

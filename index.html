@@ -1,3 +1,7 @@
+
+    try{ document.getElementById("verLabel").textContent = " ("+APP_VERSION+")"; }catch(e){}
+
+    window.__pdfMode = null; window.__paidPdfRange = null;
 <!doctype html>
 <html lang="cs">
 <head>
@@ -142,6 +146,7 @@
           <input type="date" id="toRange"/>
           <button onclick="setFilterRange()">Od–Do</button>
 
+          <button onclick="openPaidModal()">Zaplaceno</button>
           <button class="primary" onclick="openPDFMenu()">PDF</button>
         </div>
 
@@ -159,6 +164,29 @@
     </div>
   </div>
 </main>
+
+
+<!-- Paid (zaplaceno) modal -->
+<div class="modal-backdrop" id="paidModalBackdrop" style="display:none;">
+  <div class="modal">
+    <div class="actions" style="justify-content:space-between;align-items:center;">
+      <h4 style="margin:0;">Zaplacené zakázky</h4>
+      <button onclick="closePaidModal()">✕</button>
+    </div>
+    <div class="meta">Zde se zobrazují zakázky označené jako <b>Zaplaceno</b>. Můžeš vybrat měsíc a vytvořit PDF.</div>
+
+    <div class="actions" style="flex-wrap:wrap;">
+      <button onclick="setPaidMonthRange()">Měsíc</button>
+      <input type="month" id="paidMonthPick" title="Vyber měsíc"/>
+      <input type="date" id="paidFromRange"/>
+      <input type="date" id="paidToRange"/>
+      <button onclick="renderPaidList()">Od–Do</button>
+      <button class="primary" onclick="openPaidPDFMenu()">PDF</button>
+    </div>
+
+    <div id="paidList" style="margin-top:10px;"></div>
+  </div>
+</div>
 
 <!-- Entry actions modal -->
 <div class="modal-backdrop" id="modalBackdrop" onclick="closeModal(event)">
@@ -244,6 +272,40 @@
 (function() {
   var KEY = "worklog_ravito_final";
 
+  var PAID_KEY = "worklog_ravito_final_paid"; // uložiště zaplacených zakázek
+  var APP_VERSION = "RAVITO v7 – Zaplaceno";
+
+  function loadPaid() {
+    try { return JSON.parse(localStorage.getItem(PAID_KEY) || "[]"); } catch(e){ return []; }
+  }
+  function savePaid(arr) {
+    try { localStorage.setItem(PAID_KEY, JSON.stringify(arr || [])); } catch(e){}
+  }
+  function periodKey(fromD, toD) {
+    return (fromD||"") + "|" + (toD||"");
+  }
+  function isJobPaid(jobKeyLower, fromD, toD) {
+    var pk = periodKey(fromD, toD);
+    var paid = loadPaid();
+    for (var i=0;i<paid.length;i++){
+      if (paid[i].pk === pk && paid[i].jobKey === jobKeyLower) return true;
+    }
+    return false;
+  }
+  function upsertPaid(jobKeyLower, jobName, fromD, toD, min, money) {
+    var pk = periodKey(fromD, toD);
+    var paid = loadPaid();
+    paid = paid.filter(function(x){ return !(x.pk===pk && x.jobKey===jobKeyLower); });
+    paid.push({ pk:pk, from:fromD, to:toD, jobKey:jobKeyLower, jobName:jobName, min:min, money:money, markedAt:(new Date()).toISOString() });
+    savePaid(paid);
+  }
+  function removePaid(jobKeyLower, fromD, toD){
+    var pk = periodKey(fromD, toD);
+    var paid = loadPaid().filter(function(x){ return !(x.pk===pk && x.jobKey===jobKeyLower); });
+    savePaid(paid);
+  }
+
+
   // === Migrace starých verzí do této finální ===
   // Proběhne jen když je nová databáze prázdná.
   function tryMigrateFromOldKeys() {
@@ -317,6 +379,8 @@
     return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
   }
 
+  function escAttr(s){ return esc(s).replace(/"/g,"&quot;").replace(/\'/g,"&#39;"); }
+
   function minutesBetween(a,b) {
     var p = a.split(":"); var ah = parseInt(p[0],10)||0; var am = parseInt(p[1],10)||0;
     p = b.split(":"); var bh = parseInt(p[0],10)||0; var bm = parseInt(p[1],10)||0;
@@ -355,7 +419,17 @@
       jobs.push(name);
       jobs.sort(function(a,b){ return a.localeCompare(b, undefined, {sensitivity:"base"}); });
       saveJobs(jobs);
-      renderJobDatalist();
+      
+
+    // Auto-show selected month immediately after picking it
+    var mp = document.getElementById("monthPick");
+    if (mp) {
+      mp.addEventListener("change", function() {
+        window.setMonthRange && window.setMonthRange();
+      });
+    }
+
+    renderJobDatalist();
     }
   }
 
@@ -393,6 +467,15 @@
     var jobSumEl = document.getElementById("jobSummary");
 
     var arr = loadEntries().filter(function(e){ return inFilter(e.date); });
+    // skryj zakázky označené jako zaplacené pro aktuální období
+    var curFrom = document.getElementById("fromRange").value;
+    var curTo = document.getElementById("toRange").value;
+    arr = arr.filter(function(e){
+      var jobName = (e.job||"").trim() || "(bez zakázky)";
+      var jk = jobName.toLowerCase();
+      return !isJobPaid(jk, curFrom, curTo);
+    });
+
     arr.sort(function(a,b){
       if (a.date === b.date) return (a.from||"").localeCompare(b.from||"");
       return (a.date||"").localeCompare(b.date||"");
@@ -448,16 +531,39 @@
       var rows = "";
       for (var j=0;j<keys.length;j++) {
         var x = byJob[keys[j]];
-        rows += "<tr><td>" + esc(x.name) + "</td><td>" + esc(formatHM(x.min)) + "</td><td>" + esc(formatMoney(x.money)) + "</td></tr>";
+        rows += "<tr><td>" + esc(x.name) + "</td><td>" + esc(formatHM(x.min)) + "</td><td>" + esc(formatMoney(x.money)) + "</td>"
+      + "<td style=\"text-align:center;\">"
+      + "<input class=\"paidChk\" type=\"checkbox\" "
+      + "data-jobkey=\"" + escAttr(keys[j]) + "\" "
+      + "data-jobname=\"" + escAttr(x.name) + "\" "
+      + "data-min=\"" + x.min + "\" data-money=\"" + x.money + "\" "
+      + (isJobPaid(keys[j], curFrom, curTo) ? "checked " : "")
+      + "/>"
+      + "</td></tr>";
       }
       jobSumEl.innerHTML = ''
         + '<div style="margin-top:14px;">'
         +   '<div class="list-day">Souhrn zakázek</div>'
         +   '<table>'
-        +     '<tr><th>Zakázka</th><th>Hodin</th><th>Částka</th></tr>'
+        +     '<tr><th>Zakázka</th><th>Hodin</th><th>Částka</th><th>Zaplaceno</th></tr>'
         +     rows
         +   '</table>'
-        + '</div>';
+        
+      // navázání checkboxů Zaplaceno v souhrnu zakázek
+      try {
+        var chks = jobSumEl.querySelectorAll(".paidChk");
+        for (var ci=0; ci<chks.length; ci++){
+          chks[ci].addEventListener("change", function(ev){
+            var el = ev.target;
+            var jk = el.getAttribute("data-jobkey") || "";
+            var jn = el.getAttribute("data-jobname") || "";
+            var mn = parseInt(el.getAttribute("data-min")||"0",10) || 0;
+            var mo = parseInt(el.getAttribute("data-money")||"0",10) || 0;
+            togglePaidJob(jk, jn, mn, mo, el.checked);
+          });
+        }
+      } catch(e){}
++ '</div>';
     } else {
       jobSumEl.innerHTML = "";
     }
@@ -468,7 +574,97 @@
     return "id_" + Date.now() + "_" + Math.floor(Math.random()*1000000);
   }
 
-  // ===== Form actions =====
+  
+  // ===== Zaplaceno (paid) =====
+  window.togglePaidJob = function(jobKeyLower, jobName, min, money, checked) {
+    var curFrom = document.getElementById("fromRange").value;
+    var curTo = document.getElementById("toRange").value;
+    if (!curFrom || !curTo) {
+      alert("Nejprve nastav období Od–Do.");
+      render();
+      return;
+    }
+    if (checked) {
+      upsertPaid(jobKeyLower, jobName, curFrom, curTo, min, money);
+    } else {
+      removePaid(jobKeyLower, curFrom, curTo);
+    }
+    render();
+  };
+
+  window.openPaidModal = function() {
+    document.getElementById("paidModalBackdrop").style.display = "flex";
+    document.getElementById("paidMonthPick").value = document.getElementById("monthPick").value || "";
+    document.getElementById("paidFromRange").value = document.getElementById("fromRange").value || "";
+    document.getElementById("paidToRange").value = document.getElementById("toRange").value || "";
+    renderPaidList();
+  };
+  window.closePaidModal = function(){
+    document.getElementById("paidModalBackdrop").style.display = "none";
+  };
+
+  window.setPaidMonthRange = function() {
+    var m = document.getElementById("paidMonthPick").value;
+    if (!m) return;
+    var parts = m.split("-");
+    var y = parseInt(parts[0],10), mo = parseInt(parts[1],10);
+    var first = new Date(y, mo-1, 1);
+    var last = new Date(y, mo, 0);
+    document.getElementById("paidFromRange").value = toISO(first);
+    document.getElementById("paidToRange").value = toISO(last);
+    renderPaidList();
+  };
+
+  window.renderPaidList = function() {
+    var fromD = document.getElementById("paidFromRange").value;
+    var toD = document.getElementById("paidToRange").value;
+    if (!fromD || !toD) {
+      document.getElementById("paidList").innerHTML = "<i>Nastav období Od–Do (nebo vyber měsíc).</i>";
+      return;
+    }
+    var pk = periodKey(fromD, toD);
+    var paid = loadPaid().filter(function(x){ return x.pk === pk; });
+    paid.sort(function(a,b){ return (a.jobName||"").localeCompare(b.jobName||"", undefined, {sensitivity:"base"}); });
+
+    if (!paid.length) {
+      document.getElementById("paidList").innerHTML = "<i>Žádné zaplacené zakázky v období.</i>";
+      return;
+    }
+
+    var out = '';
+    out += '<div class="list-day">Období: ' + esc(fromD) + ' – ' + esc(toD) + '</div>';
+    out += '<table><tr><th>Zakázka</th><th>Hodin</th><th>Částka</th><th></th></tr>';
+    for (var i=0;i<paid.length;i++){
+      out += '<tr>'
+          + '<td>' + esc(paid[i].jobName) + '</td>'
+          + '<td>' + esc(formatHM(paid[i].min||0)) + '</td>'
+          + '<td>' + esc(formatMoney(paid[i].money||0)) + '</td>'
+          + '<td style="text-align:right;"><button onclick="unpayOne(\'' + escAttr(paid[i].jobKey) + '\')">Vrátit</button></td>'
+          + '</tr>';
+    }
+    out += '</table>';
+    document.getElementById("paidList").innerHTML = out;
+  };
+
+  window.unpayOne = function(jobKeyLower){
+    var fromD = document.getElementById("paidFromRange").value;
+    var toD = document.getElementById("paidToRange").value;
+    removePaid(jobKeyLower, fromD, toD);
+    renderPaidList();
+    render();
+  };
+
+  window.openPaidPDFMenu = function(){
+    var fromD = document.getElementById("paidFromRange").value;
+    var toD = document.getElementById("paidToRange").value;
+    if (!fromD || !toD) { alert("Nejprve nastav období Od–Do."); return; }
+    window.__pdfMode = "paid";
+    window.__paidPdfRange = {from:fromD, to:toD};
+    openPDFMenu();
+  };
+
+
+// ===== Form actions =====
   window.clearForm = function() {
     editingId = null;
     document.getElementById("editPill").style.display = "none";
@@ -619,7 +815,29 @@
   }
 
   function buildPDFByJob() {
-    var arr = loadEntries().filter(function(e){ return inFilter(e.date); });
+    var arr;
+    if (window.__pdfMode === "paid" && window.__paidPdfRange) {
+      var fromD = window.__paidPdfRange.from;
+      var toD = window.__paidPdfRange.to;
+      // vytvoř "virtuální" položky ze zaplacených zakázek, aby PDF zůstalo ve stejném formátu
+      var pk = periodKey(fromD, toD);
+      var paid = loadPaid().filter(function(x){ return x.pk === pk; });
+      arr = [];
+      for (var i=0;i<paid.length;i++){
+        arr.push({ date: fromD, from:"", to:"", breakMin:0, rate:0, job: paid[i].jobName, desc:"", _paidAgg:true, _min: paid[i].min||0, _money: paid[i].money||0 });
+      }
+    } else {
+      arr = loadEntries().filter(function(e){ return inFilter(e.date); });
+      // skryj zaplacené i v PDF běžného výpisu
+      var curFrom = document.getElementById("fromRange").value;
+      var curTo = document.getElementById("toRange").value;
+      arr = arr.filter(function(e){
+        var jobName = (e.job||"").trim() || "(bez zakázky)";
+        var jk = jobName.toLowerCase();
+        return !isJobPaid(jk, curFrom, curTo);
+      });
+    }
+    
     arr.sort(function(a,b){
       if (a.date === b.date) return (a.from||"").localeCompare(b.from||"");
       return (a.date||"").localeCompare(b.date||"");
@@ -644,6 +862,8 @@
     }
 
     var out = "";
+    var grandMin = 0;
+    var grandMoney = 0;
     for (var gi=0;gi<keys.length;gi++) {
       var g = groups[keys[gi]];
       var jobMin = 0;
@@ -658,8 +878,14 @@
       var rows = "";
       for (var ei=0;ei<g.entries.length;ei++) {
         var e2 = g.entries[ei];
-        var mins = Math.max(0, minutesBetween(e2.from, e2.to) - (e2.breakMin||0));
-        var money = Math.round((mins/60) * (e2.rate||0));
+        var mins, money;
+        if (e2._paidAgg) {
+          mins = parseInt(e2._min||0,10) || 0;
+          money = parseInt(e2._money||0,10) || 0;
+        } else {
+          mins = Math.max(0, minutesBetween(e2.from, e2.to) - (e2.breakMin||0));
+          money = Math.round((mins/60) * (e2.rate||0));
+        }
         jobMin += mins;
         jobMoney += money;
         rows += "<tr>"
@@ -673,6 +899,9 @@
           + "</tr>";
       }
 
+      grandMin += jobMin;
+      grandMoney += jobMoney;
+
       out += '<div class="jobblock">'
         + '<h2>' + esc(g.name) + '</h2>'
         + '<table>'
@@ -682,6 +911,10 @@
         + '<div class="subtotal"><b>Součet:</b> ' + esc(formatHM(jobMin)) + ' &nbsp;|&nbsp; <b>Celkem:</b> ' + esc(formatMoney(jobMoney)) + '</div>'
         + '</div>';
     }
+    out += '<div style="margin-top:14px;padding-top:10px;border-top:2px solid #333;font-size:13px;">'
+      + '<b>CELKEM ZA OBDOBÍ:</b> ' + esc(formatHM(grandMin))
+      + ' &nbsp;|&nbsp; <b>CELKEM:</b> ' + esc(formatMoney(grandMoney))
+      + '</div>';
     return out;
   }
 
