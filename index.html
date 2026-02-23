@@ -147,7 +147,7 @@
           <button onclick="setFilterRange()">Od–Do</button>
 
           <button onclick="openPaidModal()">Zaplaceno</button>
-          <button class="primary" onclick="openPDFMenu()">PDF</button>
+          <button class="primary" onclick="openUnpaidPDFMenu()">PDF</button>
         </div>
 
         <small class="hint">Dole se automaticky zobrazuje <b>dnešek</b>. Tlačítko <b>Měsíc</b> nastaví Od–Do na celý vybraný měsíc.</small>
@@ -792,12 +792,20 @@
   };
 
   // ===== PDF menu =====
+  
+window.openUnpaidPDFMenu = function(){
+    // default PDF = nezaplacené (běžný výpis)
+    window.__pdfMode = null;
+    window.__paidPdfRange = null;
+    openPDFMenu();
+  };
   window.openPDFMenu = function() {
     document.getElementById("pdfBackdrop").style.display = "flex";
   };
   window.closePDFMenu = function(ev) {
     if (ev && ev.target && ev.target.id === "pdfBackdrop") {
       document.getElementById("pdfBackdrop").style.display = "none";
+    window.__pdfMode = null; window.__paidPdfRange = null;
       return;
     }
     document.getElementById("pdfBackdrop").style.display = "none";
