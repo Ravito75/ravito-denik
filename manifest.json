@@ -1,6 +1,6 @@
 {
-  "name": "RAVITO Pracovní deník",
-  "short_name": "RAVITO Deník",
+  "name": "Krakonošova Dílna Pracovní deník",
+  "short_name": "Krakonošova Dílna Deník",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
